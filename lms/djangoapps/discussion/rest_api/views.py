@@ -2483,55 +2483,40 @@ class DiscussionModerationViewSet(DeveloperErrorViewMixin, ViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
         
-        # Rule 1: Moderator cannot ban Discussion Admin
-        if moderator_is_moderator and not moderator_is_admin and target_is_admin:
-            return Response(
-                {
-                    'error': (
-                        f'Discussion Moderators cannot ban Discussion Admins. '
-                        f'User {user.username} is a Discussion Admin.'
-                    )
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Rule 2: Global Staff cannot ban another Global Staff unless they have Discussion roles
-        if moderator_is_global_staff and target_is_global_staff:
-            if not (moderator_is_admin or moderator_is_moderator):
-                return Response(
-                    {
-                        'error': (
-                            f'Global Staff cannot ban another Global Staff user unless they have '
-                            f'Discussion Admin or Moderator permissions. User {user.username} is Global Staff.'
-                        )
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        
-        # Rule 3: Global Staff with only Discussion Admin role can only ban Discussion Moderators
-        if moderator_is_global_staff and moderator_is_admin and not moderator_is_moderator:
-            # Cannot ban Discussion Admins
+        # Rule 1: Moderator cannot ban Discussion Admin or other Moderators
+        if moderator_is_moderator and not moderator_is_admin:
             if target_is_admin:
                 return Response(
                     {
                         'error': (
-                            f'Global Staff with Discussion Admin role can only ban Discussion Moderators. '
+                            f'Discussion Moderators cannot ban Discussion Admins. '
                             f'User {user.username} is a Discussion Admin.'
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN
                 )
-            # Cannot ban Global Staff who are not Discussion Moderators
-            if target_is_global_staff and not target_is_moderator:
+            if target_is_moderator:
                 return Response(
                     {
                         'error': (
-                            f'Global Staff with Discussion Admin role can only ban Discussion Moderators. '
-                            f'User {user.username} is Global Staff without Discussion Moderator role.'
+                            f'Discussion Moderators cannot ban other Discussion Moderators. '
+                            f'User {user.username} is a Discussion Moderator.'
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN
                 )
+        
+        # Rule 2: Discussion Admins cannot ban other Discussion Admins
+        if moderator_is_admin and target_is_admin:
+            return Response(
+                {
+                    'error': (
+                        f'Discussion Admins cannot ban other Discussion Admins. '
+                        f'User {user.username} is a Discussion Admin.'
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         return user, course_key, ban_scope, reason
 
@@ -3141,55 +3126,40 @@ class DiscussionModerationViewSet(DeveloperErrorViewMixin, ViewSet):
                         status=status.HTTP_403_FORBIDDEN
                     )
             
-            # Rule 1: Moderator cannot ban Discussion Admin
-            if moderator_is_moderator and not moderator_is_admin and target_is_admin:
-                return Response(
-                    {
-                        'error': (
-                            f'Discussion Moderators cannot ban Discussion Admins. '
-                            f'User {target_user.username} is a Discussion Admin.'
-                        )
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            
-            # Rule 2: Global Staff cannot ban another Global Staff unless they have Discussion roles
-            if moderator_is_global_staff and target_is_global_staff:
-                if not (moderator_is_admin or moderator_is_moderator):
-                    return Response(
-                        {
-                            'error': (
-                                f'Global Staff cannot ban another Global Staff user unless they have '
-                                f'Discussion Admin or Moderator permissions. User {target_user.username} is Global Staff.'
-                            )
-                        },
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            
-            # Rule 3: Global Staff with only Discussion Admin role can only ban Discussion Moderators
-            if moderator_is_global_staff and moderator_is_admin and not moderator_is_moderator:
-                # Cannot ban Discussion Admins
+            # Rule 1: Moderator cannot ban Discussion Admin or other Moderators
+            if moderator_is_moderator and not moderator_is_admin:
                 if target_is_admin:
                     return Response(
                         {
                             'error': (
-                                f'Global Staff with Discussion Admin role can only ban Discussion Moderators. '
+                                f'Discussion Moderators cannot ban Discussion Admins. '
                                 f'User {target_user.username} is a Discussion Admin.'
                             )
                         },
                         status=status.HTTP_403_FORBIDDEN
                     )
-                # Cannot ban Global Staff who are not Discussion Moderators
-                if target_is_global_staff and not target_is_moderator:
+                if target_is_moderator:
                     return Response(
                         {
                             'error': (
-                                f'Global Staff with Discussion Admin role can only ban Discussion Moderators. '
-                                f'User {target_user.username} is Global Staff without Discussion Moderator role.'
+                                f'Discussion Moderators cannot ban other Discussion Moderators. '
+                                f'User {target_user.username} is a Discussion Moderator.'
                             )
                         },
                         status=status.HTTP_403_FORBIDDEN
                     )
+            
+            # Rule 2: Discussion Admins cannot ban other Discussion Admins
+            if moderator_is_admin and target_is_admin:
+                return Response(
+                    {
+                        'error': (
+                            f'Discussion Admins cannot ban other Discussion Admins. '
+                            f'User {target_user.username} is a Discussion Admin.'
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         # Enqueue Celery task (backward compatible with new parameters)
         task = delete_course_post_for_user.apply_async(
