@@ -205,3 +205,364 @@ class IsAllowedToBulkDeleteTest(ModuleStoreTestCase):
         view = self._create_view_with_kwargs()
 
         self.assertFalse(self.permission.has_permission(request, view))
+
+
+class RoleBasedBanPermissionsTest(ModuleStoreTestCase):
+    """Tests for role-based ban/unban permissions in ModerationActionsViewSet."""
+
+    def setUp(self):
+        super().setUp()
+        self.course = CourseFactory.create(org='TestX', number='CS101', run='2024')
+        self.course_key = self.course.id
+        
+        # Create users with different roles
+        self.global_staff_user = UserFactory.create(username='global_staff')
+        GlobalStaff().add_users(self.global_staff_user)
+        
+        self.admin_user = UserFactory.create(username='admin_user')
+        admin_role = Role.objects.create(name='Administrator', course_id=self.course_key)
+        admin_role.users.add(self.admin_user)
+        
+        self.moderator_user = UserFactory.create(username='moderator_user')
+        moderator_role = Role.objects.create(name='Moderator', course_id=self.course_key)
+        moderator_role.users.add(self.moderator_user)
+        
+        self.global_staff_admin_user = UserFactory.create(username='global_staff_admin')
+        GlobalStaff().add_users(self.global_staff_admin_user)
+        admin_role.users.add(self.global_staff_admin_user)
+        
+        self.global_staff_moderator_user = UserFactory.create(username='global_staff_moderator')
+        GlobalStaff().add_users(self.global_staff_moderator_user)
+        moderator_role.users.add(self.global_staff_moderator_user)
+        
+        self.regular_user = UserFactory.create(username='regular_user')
+
+    def test_global_staff_without_discussion_role_cannot_ban_moderator(self):
+        """Global Staff without discussion role cannot ban Discussion Moderator."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.moderator_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Global Staff cannot ban discussion privileged users', result.data['error'])
+
+    def test_global_staff_without_discussion_role_cannot_ban_admin(self):
+        """Global Staff without discussion role cannot ban Discussion Admin."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.admin_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Global Staff cannot ban discussion privileged users', result.data['error'])
+
+    def test_moderator_cannot_ban_admin(self):
+        """Discussion Moderator should NOT be able to ban Discussion Admin."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        # Enable feature flag
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.moderator_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.admin_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Discussion Moderators cannot ban Discussion Admins', result.data['error'])
+
+    def test_moderator_can_ban_global_staff(self):
+        """Discussion Moderator should be able to ban Global Staff users."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.moderator_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.global_staff_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple (user, course_key, ban_scope, reason)
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(len(result), 4)
+            self.assertEqual(result[0], self.global_staff_user)
+
+    def test_admin_can_ban_moderator(self):
+        """Discussion Admin should be able to ban Discussion Moderator."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.moderator_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.moderator_user)
+
+    def test_admin_can_ban_global_staff(self):
+        """Discussion Admin should be able to ban Global Staff users."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.global_staff_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.global_staff_user)
+
+    def test_global_staff_without_discussion_role_cannot_ban_global_staff(self):
+        """Global Staff without Discussion role cannot ban another Global Staff."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_user
+            
+            # Create another global staff user
+            another_global_staff = UserFactory.create(username='another_global_staff')
+            GlobalStaff().add_users(another_global_staff)
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': another_global_staff.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Global Staff cannot ban another Global Staff', result.data['error'])
+
+    def test_global_staff_with_admin_role_can_ban_moderator(self):
+        """Global Staff with Discussion Admin role can ban Discussion Moderators."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.moderator_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.moderator_user)
+
+    def test_global_staff_with_admin_role_cannot_ban_admin(self):
+        """Global Staff with only Admin role cannot ban Discussion Admins."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.admin_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Global Staff with Discussion Admin role can only ban Discussion Moderators', result.data['error'])
+
+    def test_global_staff_with_admin_role_cannot_ban_global_staff_without_moderator_role(self):
+        """Global Staff with only Admin role cannot ban Global Staff without Moderator role."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.global_staff_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return error response
+            from rest_framework.response import Response
+            self.assertIsInstance(result, Response)
+            self.assertEqual(result.status_code, 403)
+            self.assertIn('Global Staff with Discussion Admin role can only ban Discussion Moderators', result.data['error'])
+
+    def test_global_staff_with_moderator_role_can_ban_global_staff(self):
+        """Global Staff with Moderator role can ban other Global Staff."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.global_staff_moderator_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.global_staff_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.global_staff_user)
+
+    def test_moderator_can_ban_regular_user(self):
+        """Discussion Moderator can ban regular users."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.moderator_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.regular_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.regular_user)
+
+    def test_admin_can_ban_regular_user(self):
+        """Discussion Admin can ban regular users."""
+        from lms.djangoapps.discussion.rest_api.views import ModerationActionsViewSet
+        from lms.djangoapps.discussion.toggles import ENABLE_DISCUSSION_BAN
+        
+        with ENABLE_DISCUSSION_BAN.override(True):
+            viewset = ModerationActionsViewSet()
+            request = Mock()
+            request.user = self.admin_user
+            
+            result = viewset._validate_ban_request_and_get_user(
+                request,
+                {
+                    'lookup_username': self.regular_user.username,
+                    'course_id': str(self.course_key),
+                    'scope': 'course',
+                },
+                check_privileged=False
+            )
+            
+            # Should return tuple
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(result[0], self.regular_user)
