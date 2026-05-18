@@ -261,10 +261,6 @@ class GradeEventContextFilterTest(SharedModuleStoreTestCase):
     filter instead of the old enterprise_support import.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-
     def setUp(self):
         super().setUp()
         self.user = UserFactory.create()
@@ -276,13 +272,22 @@ class GradeEventContextFilterTest(SharedModuleStoreTestCase):
         course_grade_passed_first_time should call GradeEventContextRequested.run_filter
         and merge the returned context.
         """
-        original_context = {"course_id": str(self.course.id)}
-        enriched_context = {"org": "test_org", "enterprise_uuid": "abc-123"}
-        mock_run_filter.return_value = (enriched_context, self.user.id, self.course.id)
+        original_context = {"course_id": str(self.course.id), "base_key": "base_value"}
+        filtered_context = {"org": "test_org", "enterprise_uuid": "abc-123"}
+        expected_context = {
+            "course_id": str(self.course.id),
+            "base_key": "base_value",
+            "org": "test_org",
+            "enterprise_uuid": "abc-123",
+        }
+        mock_run_filter.return_value = (filtered_context, self.user.id, self.course.id)
 
         from lms.djangoapps.grades.events import course_grade_passed_first_time
         with (
-            patch('lms.djangoapps.grades.events.contexts.course_context_from_course_id', return_value=original_context),
+            patch(
+                'lms.djangoapps.grades.events.contexts.course_context_from_course_id',
+                return_value=original_context,
+            ),
             patch('lms.djangoapps.grades.events.tracker') as mock_tracker,
         ):
             course_grade_passed_first_time(self.user.id, self.course.id)
@@ -294,23 +299,53 @@ class GradeEventContextFilterTest(SharedModuleStoreTestCase):
         assert str(call_kwargs['course_id']) == str(self.course.id)
         mock_tracker.get_tracker.return_value.context.assert_called_once_with(
             'edx.course.grade.passed.first_time',
-            enriched_context,
+            expected_context,
         )
 
     @patch('lms.djangoapps.grades.events.GradeEventContextRequested.run_filter')
     def test_filter_none_return_leaves_context_intact(self, mock_run_filter):
         """
-        If run_filter returns None (fail_silently path), context is not overwritten.
+        If run_filter returns None, context is not overwritten.
         """
         original_context = {"course_id": str(self.course.id)}
         mock_run_filter.return_value = (None, self.user.id, self.course.id)
+
         from lms.djangoapps.grades.events import course_grade_passed_first_time
         with (
-            patch('lms.djangoapps.grades.events.contexts.course_context_from_course_id', return_value=original_context),
+            patch(
+                'lms.djangoapps.grades.events.contexts.course_context_from_course_id',
+                return_value=original_context,
+            ),
             patch('lms.djangoapps.grades.events.tracker') as mock_tracker,
         ):
             course_grade_passed_first_time(self.user.id, self.course.id)
-        
+
+        mock_tracker.get_tracker.return_value.context.assert_called_once_with(
+            'edx.course.grade.passed.first_time',
+            original_context,
+        )
+
+    @patch('lms.djangoapps.grades.events.GradeEventContextRequested.run_filter')
+    def test_filter_exception_leaves_context_intact(self, mock_run_filter):
+        """
+        If run_filter raises an exception, the original context is used and the
+        event still emits, as enterprise specific code is optional.
+        """
+        original_context = {"course_id": str(self.course.id)}
+        mock_run_filter.side_effect = Exception("boom")
+
+        from lms.djangoapps.grades.events import course_grade_passed_first_time
+        with (
+            patch(
+                'lms.djangoapps.grades.events.contexts.course_context_from_course_id',
+                return_value=original_context,
+            ),
+            patch('lms.djangoapps.grades.events.tracker') as mock_tracker,
+            patch('lms.djangoapps.grades.events.log') as mock_log,
+        ):
+            course_grade_passed_first_time(self.user.id, self.course.id)
+
+        mock_log.exception.assert_called_once()
         mock_tracker.get_tracker.return_value.context.assert_called_once_with(
             'edx.course.grade.passed.first_time',
             original_context,
